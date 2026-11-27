@@ -224,6 +224,11 @@ pub(crate) enum Command {
         /// Update even if the game is pinned (see `aurelia pin`), overriding the lock.
         #[arg(short = 'f', long)]
         force: bool,
+        /// Stop Steam while updating, then restart it. A running Steam writes its
+        /// own record of the old build back, so without this the update refuses to
+        /// run while Steam is open.
+        #[arg(short = 'r', long)]
+        restart_steam: bool,
     },
     /// Launch a game and wait for it to exit.
     Play {

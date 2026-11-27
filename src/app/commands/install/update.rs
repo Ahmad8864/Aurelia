@@ -15,7 +15,12 @@ pub(crate) async fn cmd_verify(app_id: u32, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_update(app_id: u32, force: bool, json: bool) -> Result<()> {
+pub(crate) async fn cmd_update(
+    app_id: u32,
+    force: bool,
+    restart_steam: bool,
+    json: bool,
+) -> Result<()> {
     // A pinned (downgraded) game must not be silently upgraded. `--force` overrides.
     let (pinned, _) = aurelia::core::config::game_pin_state(app_id).await;
     if pinned && !force {
@@ -24,11 +29,17 @@ pub(crate) async fn cmd_update(app_id: u32, force: bool, json: bool) -> Result<(
 
     let client = authed_client().await?;
     let (_install_guard, state) = InstallGuard::begin(app_id)?;
-    let rx = client
-        .update_game(app_id, state)
-        .await
-        .with_context(|| format!("failed to update app {app_id}"))?;
-    drive_progress(rx, json).await?;
+    // Steam reads appmanifests only at startup and writes its own copy back on the
+    // game's next state change, which would record the old build again.
+    let managed = steam_guard_stop(restart_steam, json)?;
+    with_steam_stopped(managed, json, async {
+        let rx = client
+            .update_game(app_id, state)
+            .await
+            .with_context(|| format!("failed to update app {app_id}"))?;
+        drive_progress(rx, json).await
+    })
+    .await?;
     report_operation(app_id, "updated", json);
     Ok(())
 }

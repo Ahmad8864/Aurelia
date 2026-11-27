@@ -2267,10 +2267,11 @@ Arguments:
   [APP_ID]  Game to update. Omit to list every installed game that needs an update
 
 Options:
-  -f, --force       Update even if the game is pinned (see `aurelia pin`), overriding the lock
-  -j, --json        Emit output (and errors) as JSON. Works with every command
-  -v, --verbose...  Increase log verbosity (repeatable: -v, -vv, -vvv). Without it only warnings and errors are logged. -v adds progress/debug logs and a launched game's own output; -vv/-vvv unmute the Steam networking stack so a stalled command shows where it is stuck. `RUST_LOG` / `AURELIA_LOG` override the logs
-  -h, --help        Print help
+  -f, --force          Update even if the game is pinned (see `aurelia pin`), overriding the lock
+  -r, --restart-steam  Stop Steam while updating, then restart it. A running Steam writes its own record of the old build back, so without this the update refuses to run while Steam is open
+  -j, --json           Emit output (and errors) as JSON. Works with every command
+  -v, --verbose...     Increase log verbosity (repeatable: -v, -vv, -vvv). Without it only warnings and errors are logged. -v adds progress/debug logs and a launched game's own output; -vv/-vvv unmute the Steam networking stack so a stalled command shows where it is stuck. `RUST_LOG` / `AURELIA_LOG` override the logs
+  -h, --help           Print help
 
 ===== aurelia user =====
 Profile by SteamID64, /profiles/ URL, friend name, `me`

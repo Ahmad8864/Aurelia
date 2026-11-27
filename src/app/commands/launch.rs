@@ -477,7 +477,30 @@ pub(crate) async fn cmd_play(
             }
             tracing::warn!("pre-launch update check failed ({e:#}); launching current version");
         }
-        if game.update_available {
+        // A running Steam reads appmanifests only at startup and writes its own copy
+        // back on the game's next state change, such as this launch, which would
+        // record the old build again.
+        if game.update_available && SteamClient::steam_is_running() {
+            let hint =
+                format!("close Steam or run `aurelia update {app_id} --restart-steam` first");
+            if update_required {
+                bail!(
+                    "required update for Family-Shared game {} can't be installed while \
+                     Steam is running; {hint}",
+                    game.name
+                );
+            }
+            let warning = format!(
+                "Update available for {}, but Steam is running and would record the old \
+                 build again. Launching the installed build; to update, {hint}.",
+                game.name
+            );
+            if json {
+                tracing::warn!(appid = app_id, "{warning}");
+            } else {
+                cli_println!("⚠ {warning}");
+            }
+        } else if game.update_available {
             if !json {
                 let kind = if update_required {
                     "Required update"

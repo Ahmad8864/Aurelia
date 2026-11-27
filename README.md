@@ -548,9 +548,11 @@ The session daemon keeps running until `aurelia daemon stop`. Set
 used it for that long and no install or game is running. The next command starts a new
 daemon, which logs on to Steam again.
 
-`move`, `relink` and `import` edit Steam's library files, which a running Steam client
-overwrites when it exits, so they refuse to run while Steam is open. Add `--restart-steam` to
-have Aurelia stop Steam, make the change and start Steam again, even if the change fails.
+`move`, `relink`, `import` and `update` edit Steam's library files, which a running Steam
+client overwrites with its own copy, so they refuse to run while Steam is open. Add
+`--restart-steam` to have Aurelia stop Steam, make the change and start Steam again, even if
+the change fails. For the same reason `play` skips its pre-launch update while Steam is open
+and launches the installed build, or refuses for a Family-Shared game that must be current.
 
 On Linux, `play` pre-compiles a game's Vulkan shaders before it starts, like Steam's
 "Processing Vulkan shaders" step. It replays the game's Steam pipeline cache

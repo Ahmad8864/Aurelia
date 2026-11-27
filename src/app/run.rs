@@ -432,8 +432,12 @@ async fn run(mut cli: Cli) -> Result<()> {
         Command::Drm { app_id } => cmd_drm(app_id, json).await,
         Command::Verify { app_id } => cmd_verify(app_id, json).await,
         Command::Duplicates => cmd_duplicates(json).await,
-        Command::Update { app_id, force } => match app_id {
-            Some(id) => cmd_update(id, force, json).await,
+        Command::Update {
+            app_id,
+            force,
+            restart_steam,
+        } => match app_id {
+            Some(id) => cmd_update(id, force, restart_steam, json).await,
             None => cmd_check_updates(json).await,
         },
         Command::Manifests { app_id, depot } => cmd_manifests(app_id, depot, json).await,
