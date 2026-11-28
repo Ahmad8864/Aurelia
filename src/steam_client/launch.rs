@@ -817,6 +817,12 @@ impl SteamClient {
                 state.status_text = "Operation complete".to_string();
             }
 
+            // Verify repairs against the manifests already recorded, so the record stays.
+            if verify_mode {
+                emit_completed(&tx, "verify completed").await;
+                return;
+            }
+
             // The content was written into `install_root`
             let game_name = match recorded_name {
                 Some(name) => name,
@@ -846,15 +852,7 @@ impl SteamClient {
             ) {
                 tracing::warn!("failed writing appmanifest for {}: {}", appid, err);
             }
-            emit_completed(
-                &tx,
-                if verify_mode {
-                    "verify completed"
-                } else {
-                    "update completed"
-                },
-            )
-            .await;
+            emit_completed(&tx, "update completed").await;
         });
 
         Ok(rx)
