@@ -500,8 +500,9 @@ impl SteamClient {
             // than missing. (Skipped for DLC, whose content lives in the base game's
             // manifest — overwriting that here would mark the base game for re-download.)
             if dlc_appid.is_none() {
-                if let Err(e) = SteamClient::write_appmanifest(
-                    &manifest_path,
+                let existing = std::fs::read_to_string(&manifest_path).ok();
+                let content = super::manifests::render_appmanifest(
+                    existing.as_deref(),
                     AppManifestSpec {
                         appid,
                         game_name: &game_name,
@@ -512,7 +513,10 @@ impl SteamClient {
                         pin_updates,
                         language: recorded_language.as_deref(),
                     },
-                ) {
+                );
+                if let Err(e) =
+                    crate::core::atomic::write_atomic(&manifest_path, content.as_bytes())
+                {
                     tracing::warn!("failed writing initial appmanifest for app {appid}: {e}");
                 } else {
                     tracing::info!(
@@ -570,10 +574,29 @@ impl SteamClient {
 
             let manifest_result = if let Some(dlc) = dlc_appid {
                 // Register the DLC's depots into the base game's manifest (enable it).
-                SteamClient::enable_dlc_in_appmanifest(&manifest_path, dlc, &successful_depots)
+                std::fs::read_to_string(&manifest_path)
+                    .with_context(|| format!("failed reading {}", manifest_path.display()))
+                    .and_then(|raw| {
+                        super::manifests::enable_dlc_text(&raw, dlc, &successful_depots)
+                    })
+                    .and_then(|text| match text {
+                        Some(text) => {
+                            crate::core::atomic::write_atomic(&manifest_path, text.as_bytes())?;
+                            tracing::info!("Enabled DLC {dlc} in {}", manifest_path.display());
+                            Ok(())
+                        }
+                        None => {
+                            tracing::info!(
+                                "DLC {dlc} already enabled in {}",
+                                manifest_path.display()
+                            );
+                            Ok(())
+                        }
+                    })
             } else {
-                SteamClient::write_appmanifest(
-                    &manifest_path,
+                let existing = std::fs::read_to_string(&manifest_path).ok();
+                let content = super::manifests::render_appmanifest(
+                    existing.as_deref(),
                     AppManifestSpec {
                         appid,
                         game_name: &game_name,
@@ -584,7 +607,8 @@ impl SteamClient {
                         pin_updates,
                         language: recorded_language.as_deref(),
                     },
-                )
+                );
+                crate::core::atomic::write_atomic(&manifest_path, content.as_bytes())
             };
             if let Err(err) = manifest_result {
                 tracing::warn!("failed updating appmanifest for {}: {}", appid, err);

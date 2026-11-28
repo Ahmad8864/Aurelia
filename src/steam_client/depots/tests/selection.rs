@@ -402,12 +402,8 @@ const LANGUAGE_DEPOTS: &str = r#"
     "1086943" { "config" { "oslist" "windows" "language" "french" } }
 "#;
 
-/// Install via the real manifest writer.
-fn fresh_install(dir: &Path, existing: Option<&str>, rows: &str, steam: &str) -> String {
-    let path = dir.join("appmanifest_1.acf");
-    if let Some(existing) = existing {
-        std::fs::write(&path, existing).unwrap();
-    }
+/// Install via the real manifest renderer.
+fn fresh_install(existing: Option<&str>, rows: &str, steam: &str) -> String {
     let manifest_language = existing.and_then(manifests::user_config_language);
     let wanted =
         crate::core::locale::pick_install_language(manifest_language.as_deref(), Some(steam), None);
@@ -419,8 +415,8 @@ fn fresh_install(dir: &Path, existing: Option<&str>, rows: &str, steam: &str) ->
         &wanted,
         false,
     );
-    SteamClient::write_appmanifest(
-        &path,
+    manifests::render_appmanifest(
+        existing,
         AppManifestSpec {
             appid: 1,
             game_name: "Game",
@@ -432,8 +428,6 @@ fn fresh_install(dir: &Path, existing: Option<&str>, rows: &str, steam: &str) ->
             language: recorded.as_deref(),
         },
     )
-    .unwrap();
-    std::fs::read_to_string(&path).unwrap()
 }
 
 #[test]
@@ -449,8 +443,7 @@ fn no_language_depots_writes_no_language() {
         None
     );
 
-    let dir = tempfile::tempdir().unwrap();
-    let raw = fresh_install(dir.path(), None, NO_LANGUAGE_DEPOTS, "german");
+    let raw = fresh_install(None, NO_LANGUAGE_DEPOTS, "german");
     assert_eq!(manifests::user_config_language(&raw), None);
 }
 
@@ -463,8 +456,7 @@ fn wanted_language_depot_is_recorded() {
         Some("german")
     );
 
-    let dir = tempfile::tempdir().unwrap();
-    let raw = fresh_install(dir.path(), None, LANGUAGE_DEPOTS, "german");
+    let raw = fresh_install(None, LANGUAGE_DEPOTS, "german");
     assert_eq!(
         manifests::user_config_language(&raw).as_deref(),
         Some("german")
@@ -489,8 +481,7 @@ fn missing_language_depot_records_no_fallback() {
         None
     );
 
-    let dir = tempfile::tempdir().unwrap();
-    let raw = fresh_install(dir.path(), None, LANGUAGE_DEPOTS, "polish");
+    let raw = fresh_install(None, LANGUAGE_DEPOTS, "polish");
     assert_eq!(manifests::user_config_language(&raw), None);
 }
 
@@ -500,21 +491,20 @@ fn existing_manifest_language_is_kept_verbatim() {
         \t\"UserConfig\"\n\t{\n\t\t\"language\"\t\t\"polish\"\n\t\t\"DisabledDLC\"\t\t\"5\"\n\t}\n}\n";
     let block =
         "\"UserConfig\"\n\t{\n\t\t\"language\"\t\t\"polish\"\n\t\t\"DisabledDLC\"\t\t\"5\"\n\t}";
-    let dir = tempfile::tempdir().unwrap();
 
     // No Polish depot: nothing recorded, kept.
-    let raw = fresh_install(dir.path(), Some(existing), LANGUAGE_DEPOTS, "german");
+    let raw = fresh_install(Some(existing), LANGUAGE_DEPOTS, "german");
     assert!(raw.contains(block));
     assert_eq!(raw.matches("\"language\"").count(), 1);
 
     // No language depots at all: kept.
-    let raw = fresh_install(dir.path(), Some(existing), NO_LANGUAGE_DEPOTS, "german");
+    let raw = fresh_install(Some(existing), NO_LANGUAGE_DEPOTS, "german");
     assert!(raw.contains(block));
     assert_eq!(raw.matches("\"language\"").count(), 1);
 
     // Manifest language beats Steam's.
     let german = existing.replace("polish", "german");
-    let raw = fresh_install(dir.path(), Some(&german), LANGUAGE_DEPOTS, "english");
+    let raw = fresh_install(Some(&german), LANGUAGE_DEPOTS, "english");
     assert!(raw.contains(&block.replace("polish", "german")));
     assert_eq!(raw.matches("\"language\"").count(), 1);
 }

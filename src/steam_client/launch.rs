@@ -837,8 +837,9 @@ impl SteamClient {
             let build_id =
                 SteamClient::remote_buildid_static(&connection, appid, &active_branch).await;
 
-            if let Err(err) = SteamClient::write_appmanifest(
-                &manifest_path,
+            let existing = std::fs::read_to_string(&manifest_path).ok();
+            let content = super::manifests::render_appmanifest(
+                existing.as_deref(),
                 AppManifestSpec {
                     appid,
                     game_name: &game_name,
@@ -849,7 +850,9 @@ impl SteamClient {
                     pin_updates: false,
                     language: None,
                 },
-            ) {
+            );
+            if let Err(err) = crate::core::atomic::write_atomic(&manifest_path, content.as_bytes())
+            {
                 tracing::warn!("failed writing appmanifest for {}: {}", appid, err);
             }
             emit_completed(&tx, "update completed").await;

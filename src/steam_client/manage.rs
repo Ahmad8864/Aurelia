@@ -428,8 +428,8 @@ impl SteamClient {
             );
         }
 
-        Self::write_appmanifest(
-            &manifest,
+        let content = super::manifests::render_appmanifest(
+            None,
             AppManifestSpec {
                 appid,
                 game_name: &name,
@@ -440,7 +440,8 @@ impl SteamClient {
                 pin_updates: false,
                 language: None,
             },
-        )?;
+        );
+        crate::core::atomic::write_atomic(&manifest, content.as_bytes())?;
 
         // Register in libraryfolders.vdf (add to this library; nothing to remove).
         update_libraryfolders_for(&library, &library, appid, &common_dir).await;

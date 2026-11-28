@@ -1,17 +1,15 @@
 use super::super::*;
 use crate::core::acf;
+use manifests::render_appmanifest;
 
 #[test]
-fn write_appmanifest_preserves_owner_and_branch() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("appmanifest_960090.acf");
+fn render_appmanifest_preserves_owner_and_branch() {
     let existing = "\"AppState\"\n{\n\t\"appid\"\t\t\"960090\"\n\t\"name\"\t\t\"Bloons TD 6\"\n\
         \t\"installdir\"\t\t\"BloonsTD6\"\n\t\"LastOwner\"\t\t\"76561198000000001\"\n\
         \t\"UserConfig\"\n\t{\n\t\t\"betakey\"\t\t\"no-discord\"\n\t}\n}\n";
-    std::fs::write(&path, existing).unwrap();
 
-    SteamClient::write_appmanifest(
-        &path,
+    let raw = render_appmanifest(
+        Some(existing),
         AppManifestSpec {
             appid: 960090,
             game_name: "Bloons TD 6",
@@ -22,10 +20,8 @@ fn write_appmanifest_preserves_owner_and_branch() {
             pin_updates: false,
             language: None,
         },
-    )
-    .unwrap();
+    );
 
-    let raw = std::fs::read_to_string(&path).unwrap();
     assert_eq!(
         acf::parse_app_manifest(&raw).last_owner,
         Some(76561198000000001)
@@ -47,11 +43,9 @@ fn write_appmanifest_preserves_owner_and_branch() {
 }
 
 #[test]
-fn write_appmanifest_fresh_has_no_owner_or_branch() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("appmanifest_1.acf");
-    SteamClient::write_appmanifest(
-        &path,
+fn render_appmanifest_fresh_has_no_owner_or_branch() {
+    let raw = render_appmanifest(
+        None,
         AppManifestSpec {
             appid: 1,
             game_name: "Game",
@@ -62,27 +56,22 @@ fn write_appmanifest_fresh_has_no_owner_or_branch() {
             pin_updates: false,
             language: None,
         },
-    )
-    .unwrap();
-    let raw = std::fs::read_to_string(&path).unwrap();
+    );
     assert_eq!(acf::parse_app_manifest(&raw).last_owner, None);
     assert_eq!(acf::parse_app_manifest(&raw).active_branch, "public");
     assert!(!raw.contains("UserConfig"));
 }
 
 #[test]
-fn write_appmanifest_keeps_user_and_mounted_config() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("appmanifest_1086940.acf");
+fn render_appmanifest_keeps_user_and_mounted_config() {
     let existing = "\"AppState\"\n{\n\t\"appid\"\t\t\"1086940\"\n\t\"StateFlags\"\t\t\"6\"\n\
         \t\"UserConfig\"\n\t{\n\t\t\"language\"\t\t\"german\"\n\t\t\"DisabledDLC\"\t\t\"2378400,2378401\"\n\
         \t\t\"platform_override_dest\"\t\t\"linux\"\n\t\t\"platform_override_source\"\t\t\"windows\"\n\
         \t\t\"betakey\"\t\t\"beta\"\n\t}\n\
         \t\"MountedConfig\"\n\t{\n\t\t\"language\"\t\t\"german\"\n\t\t\"DisabledDLC\"\t\t\"2378400\"\n\t}\n}\n";
-    std::fs::write(&path, existing).unwrap();
 
-    SteamClient::write_appmanifest(
-        &path,
+    let raw = render_appmanifest(
+        Some(existing),
         AppManifestSpec {
             appid: 1086940,
             game_name: "Baldur's Gate 3",
@@ -93,10 +82,8 @@ fn write_appmanifest_keeps_user_and_mounted_config() {
             pin_updates: false,
             language: Some("english"),
         },
-    )
-    .unwrap();
+    );
 
-    let raw = std::fs::read_to_string(&path).unwrap();
     assert!(raw.contains("\"DisabledDLC\"\t\t\"2378400,2378401\""));
     assert!(raw.contains("\"platform_override_dest\"\t\t\"linux\""));
     assert!(raw.contains("\"platform_override_source\"\t\t\"windows\""));
@@ -112,11 +99,9 @@ fn write_appmanifest_keeps_user_and_mounted_config() {
 }
 
 #[test]
-fn write_appmanifest_records_language_on_fresh_install() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("appmanifest_1.acf");
-    SteamClient::write_appmanifest(
-        &path,
+fn render_appmanifest_records_language_on_fresh_install() {
+    let raw = render_appmanifest(
+        None,
         AppManifestSpec {
             appid: 1,
             game_name: "Game",
@@ -127,9 +112,7 @@ fn write_appmanifest_records_language_on_fresh_install() {
             pin_updates: false,
             language: Some("german"),
         },
-    )
-    .unwrap();
-    let raw = std::fs::read_to_string(&path).unwrap();
+    );
     assert_eq!(
         manifests::user_config_language(&raw).as_deref(),
         Some("german")
@@ -137,9 +120,7 @@ fn write_appmanifest_records_language_on_fresh_install() {
 }
 
 #[test]
-fn write_appmanifest_keeps_steam_fields_and_dlc_tags() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("appmanifest_977950.acf");
+fn render_appmanifest_keeps_steam_fields_and_dlc_tags() {
     let existing = "\"AppState\"\n{\n\t\"appid\"\t\t\"977950\"\n\t\"StateFlags\"\t\t\"6\"\n\
         \t\"LastPlayed\"\t\t\"1781732299\"\n\t\"DownloadType\"\t\t\"2\"\n\
         \t\"TargetBuildID\"\t\t\"26397875\"\n\t\"LastOwner\"\t\t\"76561198000000001\"\n\
@@ -149,11 +130,10 @@ fn write_appmanifest_keeps_steam_fields_and_dlc_tags() {
         \t\t\"1977584\"\n\t\t{\n\t\t\t\"manifest\"\t\t\"8\"\n\t\t\t\"size\"\t\t\"80\"\n\t\t\t\"dlcappid\"\t\t\"1977580\"\n\t\t}\n\
         \t}\n\
         \t\"SharedDepots\"\n\t{\n\t\t\"228988\"\t\t\"228980\"\n\t}\n}\n";
-    std::fs::write(&path, existing).unwrap();
 
     // 1977584 was not re-downloaded.
-    SteamClient::write_appmanifest(
-        &path,
+    let raw = render_appmanifest(
+        Some(existing),
         AppManifestSpec {
             appid: 977950,
             game_name: "A Dance of Fire and Ice",
@@ -164,10 +144,8 @@ fn write_appmanifest_keeps_steam_fields_and_dlc_tags() {
             pin_updates: false,
             language: None,
         },
-    )
-    .unwrap();
+    );
 
-    let raw = std::fs::read_to_string(&path).unwrap();
     assert!(raw.contains("\"LastPlayed\"\t\t\"1781732299\""));
     assert!(raw.contains("\"DownloadType\"\t\t\"2\""));
     assert!(raw.contains("\"TargetBuildID\"\t\t\"0\""));
@@ -189,16 +167,9 @@ fn write_appmanifest_keeps_steam_fields_and_dlc_tags() {
 }
 
 #[test]
-fn write_appmanifest_keeps_target_build_while_updating() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("appmanifest_1.acf");
-    std::fs::write(
-        &path,
-        "\"AppState\"\n{\n\t\"appid\"\t\t\"1\"\n\t\"TargetBuildID\"\t\t\"55\"\n}\n",
-    )
-    .unwrap();
-    SteamClient::write_appmanifest(
-        &path,
+fn render_appmanifest_keeps_target_build_while_updating() {
+    let raw = render_appmanifest(
+        Some("\"AppState\"\n{\n\t\"appid\"\t\t\"1\"\n\t\"TargetBuildID\"\t\t\"55\"\n}\n"),
         AppManifestSpec {
             appid: 1,
             game_name: "Game",
@@ -209,8 +180,6 @@ fn write_appmanifest_keeps_target_build_while_updating() {
             pin_updates: false,
             language: None,
         },
-    )
-    .unwrap();
-    let raw = std::fs::read_to_string(&path).unwrap();
+    );
     assert!(raw.contains("\"TargetBuildID\"\t\t\"55\""));
 }

@@ -271,229 +271,6 @@ impl SteamClient {
         self.resolve_install_game_info(appid).await.0
     }
 
-    /// Write a Steam `appmanifest_<appid>.acf` that the desktop client recognises as a
-    /// complete, up-to-date install — so opening the Steam launcher does **not** treat
-    /// the game as out-of-date and re-download over the files we just wrote.
-    ///
-    /// The two fields that resolve that clash are `buildid` (Steam compares it against
-    /// the latest build in PICS; a missing/zero value reads as "update available") and
-    /// `StateFlags`. When `fully_installed` is false the manifest is written in the
-    /// "update required" state (4 → fully installed, 2 → update required) so an install
-    /// in progress is registered with Steam rather than appearing as a fresh download.
-    ///
-    /// `pin_updates` writes `AutoUpdateBehavior "1"` ("only update on launch") instead
-    /// of the default `"0"`, so the official Steam client won't eagerly re-patch a
-    /// downgraded/pinned install out from under Aurelia. Normal installs pass `false`.
-    ///
-    /// Existing `UserConfig`/`MountedConfig` are copied verbatim.
-    /// `language` fills a missing `UserConfig` language.
-    pub fn write_appmanifest(path: &Path, spec: AppManifestSpec<'_>) -> Result<()> {
-        let AppManifestSpec {
-            appid,
-            game_name,
-            installdir,
-            installed_depots,
-            buildid,
-            fully_installed,
-            pin_updates,
-            language,
-        } = spec;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed creating {}", parent.display()))?;
-        }
-
-        // Preserve existing manifest
-        let existing = std::fs::read_to_string(path).ok();
-        let (last_owner, beta_key) = match existing.as_deref() {
-            Some(existing) => {
-                let parsed = acf::parse_app_manifest(existing);
-                (
-                    parsed.last_owner.unwrap_or(0),
-                    Some(parsed.active_branch).filter(|b| b != "public"),
-                )
-            }
-            None => (0, None),
-        };
-        let old_user_config = existing
-            .as_deref()
-            .and_then(|raw| top_level_block(raw, "UserConfig"));
-        let mounted_config = existing
-            .as_deref()
-            .and_then(|raw| top_level_block(raw, "MountedConfig"));
-        let kept = existing
-            .as_deref()
-            .map(|raw| kept_fields(raw, fully_installed))
-            .unwrap_or_default();
-        let old_depots = existing
-            .as_deref()
-            .and_then(|raw| top_level_block(raw, "InstalledDepots"))
-            .map(depot_entries)
-            .unwrap_or_default();
-
-        // Strip characters that are structurally significant in VDF text so a name
-        // cannot break out of its quoted value or inject extra keys/blocks.
-        let game_name = game_name.replace(['"', '\n', '\r', '{', '}', '\\'], "");
-        let buildid = buildid.unwrap_or("0");
-        // DLC content stays on disk.
-        let carried: Vec<&DepotEntry> = old_depots
-            .iter()
-            .filter(|d| d.is_dlc() && !installed_depots.iter().any(|(id, ..)| *id == d.id))
-            .collect();
-        let size_on_disk: u64 = installed_depots
-            .iter()
-            .map(|(_, _, size)| *size)
-            .sum::<u64>()
-            + carried.iter().map(|d| d.size).sum::<u64>();
-        // 4 = StateFullyInstalled, 2 = StateUpdateRequired.
-        let state_flags = if fully_installed { 4 } else { 2 };
-        // 0 = auto-update always, 1 = only update on launch (used to hold a pinned/
-        // downgraded build in place against the official client's eager re-patching).
-        let auto_update_behavior = if pin_updates { 1 } else { 0 };
-        let bytes_have = if fully_installed { size_on_disk } else { 0 };
-        let last_updated = crate::core::time::now_unix();
-
-        let mut content = format!(
-            "\"AppState\"\n{{\n\
-             \t\"appid\"\t\t\"{appid}\"\n\
-             \t\"Universe\"\t\t\"1\"\n\
-             \t\"name\"\t\t\"{game_name}\"\n\
-             \t\"StateFlags\"\t\t\"{state_flags}\"\n\
-             \t\"installdir\"\t\t\"{installdir}\"\n\
-             \t\"LastUpdated\"\t\t\"{last_updated}\"\n\
-             \t\"SizeOnDisk\"\t\t\"{size_on_disk}\"\n\
-             \t\"StagingSize\"\t\t\"0\"\n\
-             \t\"buildid\"\t\t\"{buildid}\"\n\
-             \t\"LastOwner\"\t\t\"{last_owner}\"\n\
-             \t\"UpdateResult\"\t\t\"0\"\n\
-             \t\"BytesToDownload\"\t\t\"{size_on_disk}\"\n\
-             \t\"BytesDownloaded\"\t\t\"{bytes_have}\"\n\
-             \t\"BytesToStage\"\t\t\"{size_on_disk}\"\n\
-             \t\"BytesStaged\"\t\t\"{bytes_have}\"\n\
-             \t\"AutoUpdateBehavior\"\t\t\"{auto_update_behavior}\"\n\
-             \t\"AllowOtherDownloadsWhileRunning\"\t\t\"0\"\n\
-             \t\"ScheduledAutoUpdate\"\t\t\"0\"\n"
-        );
-        content.push_str(&kept.pairs);
-
-        if !installed_depots.is_empty() || !carried.is_empty() {
-            content.push_str("\t\"InstalledDepots\"\n\t{\n");
-            for (depot_id, manifest_id, size) in installed_depots {
-                let extras = old_depots
-                    .iter()
-                    .find(|d| d.id == depot_id)
-                    .map(|d| d.extras.as_str())
-                    .unwrap_or("");
-                content.push_str(&format!(
-                    "\t\t\"{depot_id}\"\n\t\t{{\n\t\t\t\"manifest\"\t\t\"{manifest_id}\"\n\t\t\t\"size\"\t\t\"{size}\"\n{extras}\t\t}}\n"
-                ));
-            }
-            for depot in carried {
-                content.push_str(&format!("\t\t{}\n", depot.raw));
-            }
-            content.push_str("\t}\n");
-        }
-
-        let clean = |s: &str| s.replace(['"', '\n', '\r', '{', '}', '\\'], "");
-        let user_config = match old_user_config {
-            Some(block) => Some(block.to_string()),
-            None => {
-                let mut entries = String::new();
-                if let Some(branch) = beta_key {
-                    entries.push_str(&format!("\t\t\"betakey\"\t\t\"{}\"\n", clean(&branch)));
-                }
-                (!entries.is_empty()).then(|| format!("\"UserConfig\"\n\t{{\n{entries}\t}}"))
-            }
-        };
-        let language = language.map(clean).filter(|l| !l.is_empty());
-        let user_config = match (user_config, language) {
-            (Some(block), Some(lang)) => Some(block_with_key(&block, "language", &lang)),
-            (None, Some(lang)) => Some(format!(
-                "\"UserConfig\"\n\t{{\n\t\t\"language\"\t\t\"{lang}\"\n\t}}"
-            )),
-            (block, None) => block,
-        };
-        for block in user_config.iter().map(String::as_str).chain(mounted_config) {
-            content.push('\t');
-            content.push_str(block);
-            content.push('\n');
-        }
-        content.push_str(&kept.blocks);
-
-        content.push_str("}\n");
-
-        crate::core::atomic::write_atomic(path, content.as_bytes())?;
-        Ok(())
-    }
-
-    /// Mark a DLC as installed and enabled in the base game's appmanifest:
-    ///
-    /// 1. Add the DLC's downloaded depots to `InstalledDepots`, tagged with `dlcappid`
-    ///    (how Steam records DLC content as present).
-    /// 2. Remove the DLC's appid from every `DisabledDLC` list (how Steam records the
-    ///    DLC as enabled vs. disabled).
-    ///
-    /// Existing depot entries are left untouched, so re-installs are idempotent.
-    pub fn enable_dlc_in_appmanifest(
-        base_manifest: &Path,
-        dlc_appid: u32,
-        depots: &[(u32, u64, u64)],
-    ) -> Result<()> {
-        let mut content = std::fs::read_to_string(base_manifest)
-            .with_context(|| format!("failed reading {}", base_manifest.display()))?;
-        let mut changed = false;
-
-        // 1. Ensure the DLC's depots are recorded with their dlcappid.
-        let mut entries = String::new();
-        for (depot_id, manifest_id, size) in depots {
-            if content.contains(&format!("\"{depot_id}\"")) {
-                continue; // already recorded
-            }
-            entries.push_str(&format!(
-                "\t\t\"{depot_id}\"\n\t\t{{\n\t\t\t\"manifest\"\t\t\"{manifest_id}\"\n\t\t\t\"size\"\t\t\"{size}\"\n\t\t\t\"dlcappid\"\t\t\"{dlc_appid}\"\n\t\t}}\n"
-            ));
-        }
-        if !entries.is_empty() {
-            if let Some(pos) = content.find("\"InstalledDepots\"") {
-                let rel = content[pos..].find('{').ok_or_else(|| {
-                    anyhow!(
-                        "malformed InstalledDepots block in {}",
-                        base_manifest.display()
-                    )
-                })?;
-                let insert_at = pos + rel + 1;
-                content.insert_str(insert_at, &format!("\n{entries}"));
-            } else {
-                let last = content
-                    .rfind('}')
-                    .ok_or_else(|| anyhow!("malformed appmanifest {}", base_manifest.display()))?;
-                content.insert_str(
-                    last,
-                    &format!("\t\"InstalledDepots\"\n\t{{\n{entries}\t}}\n"),
-                );
-            }
-            changed = true;
-        }
-
-        // 2. Remove the DLC appid from any "DisabledDLC" lists (enable it).
-        let updated = apply_dlc_disabled(&content, dlc_appid, false);
-        if updated != content {
-            content = updated;
-            changed = true;
-        }
-
-        if changed {
-            crate::core::atomic::write_atomic(base_manifest, content.as_bytes())?;
-            tracing::info!("Enabled DLC {dlc_appid} in {}", base_manifest.display());
-        } else {
-            tracing::info!(
-                "DLC {dlc_appid} already enabled in {}",
-                base_manifest.display()
-            );
-        }
-        Ok(())
-    }
-
     /// Enable or disable an owned DLC by editing the base game's appmanifest
     /// `DisabledDLC` lists. Returns the base game's appid.
     ///
@@ -555,6 +332,203 @@ impl SteamClient {
         }
         Ok(out)
     }
+}
+
+/// The text of a Steam `appmanifest_<appid>.acf` that the desktop client recognises
+/// as a complete, up-to-date install — so opening the Steam launcher does **not**
+/// treat the game as out-of-date and re-download over the files we just wrote.
+///
+/// The two fields that resolve that clash are `buildid` (Steam compares it against
+/// the latest build in PICS; a missing/zero value reads as "update available") and
+/// `StateFlags`. When `fully_installed` is false the manifest is written in the
+/// "update required" state (4 → fully installed, 2 → update required) so an install
+/// in progress is registered with Steam rather than appearing as a fresh download.
+///
+/// `pin_updates` writes `AutoUpdateBehavior "1"` ("only update on launch") instead
+/// of the default `"0"`, so the official Steam client won't eagerly re-patch a
+/// downgraded/pinned install out from under Aurelia. Normal installs pass `false`.
+///
+/// `existing` is the manifest's current text: its `UserConfig`/`MountedConfig` are
+/// copied verbatim. `language` fills a missing `UserConfig` language.
+pub(crate) fn render_appmanifest(existing: Option<&str>, spec: AppManifestSpec<'_>) -> String {
+    let AppManifestSpec {
+        appid,
+        game_name,
+        installdir,
+        installed_depots,
+        buildid,
+        fully_installed,
+        pin_updates,
+        language,
+    } = spec;
+
+    let (last_owner, beta_key) = match existing {
+        Some(existing) => {
+            let parsed = acf::parse_app_manifest(existing);
+            (
+                parsed.last_owner.unwrap_or(0),
+                Some(parsed.active_branch).filter(|b| b != "public"),
+            )
+        }
+        None => (0, None),
+    };
+    let old_user_config = existing.and_then(|raw| top_level_block(raw, "UserConfig"));
+    let mounted_config = existing.and_then(|raw| top_level_block(raw, "MountedConfig"));
+    let kept = existing
+        .map(|raw| kept_fields(raw, fully_installed))
+        .unwrap_or_default();
+    let old_depots = existing
+        .and_then(|raw| top_level_block(raw, "InstalledDepots"))
+        .map(depot_entries)
+        .unwrap_or_default();
+
+    // Strip characters that are structurally significant in VDF text so a name
+    // cannot break out of its quoted value or inject extra keys/blocks.
+    let game_name = game_name.replace(['"', '\n', '\r', '{', '}', '\\'], "");
+    let buildid = buildid.unwrap_or("0");
+    // DLC content stays on disk.
+    let carried: Vec<&DepotEntry> = old_depots
+        .iter()
+        .filter(|d| d.is_dlc() && !installed_depots.iter().any(|(id, ..)| *id == d.id))
+        .collect();
+    let size_on_disk: u64 = installed_depots
+        .iter()
+        .map(|(_, _, size)| *size)
+        .sum::<u64>()
+        + carried.iter().map(|d| d.size).sum::<u64>();
+    // 4 = StateFullyInstalled, 2 = StateUpdateRequired.
+    let state_flags = if fully_installed { 4 } else { 2 };
+    // 0 = auto-update always, 1 = only update on launch (used to hold a pinned/
+    // downgraded build in place against the official client's eager re-patching).
+    let auto_update_behavior = if pin_updates { 1 } else { 0 };
+    let bytes_have = if fully_installed { size_on_disk } else { 0 };
+    let last_updated = crate::core::time::now_unix();
+
+    let mut content = format!(
+        "\"AppState\"\n{{\n\
+         \t\"appid\"\t\t\"{appid}\"\n\
+         \t\"Universe\"\t\t\"1\"\n\
+         \t\"name\"\t\t\"{game_name}\"\n\
+         \t\"StateFlags\"\t\t\"{state_flags}\"\n\
+         \t\"installdir\"\t\t\"{installdir}\"\n\
+         \t\"LastUpdated\"\t\t\"{last_updated}\"\n\
+         \t\"SizeOnDisk\"\t\t\"{size_on_disk}\"\n\
+         \t\"StagingSize\"\t\t\"0\"\n\
+         \t\"buildid\"\t\t\"{buildid}\"\n\
+         \t\"LastOwner\"\t\t\"{last_owner}\"\n\
+         \t\"UpdateResult\"\t\t\"0\"\n\
+         \t\"BytesToDownload\"\t\t\"{size_on_disk}\"\n\
+         \t\"BytesDownloaded\"\t\t\"{bytes_have}\"\n\
+         \t\"BytesToStage\"\t\t\"{size_on_disk}\"\n\
+         \t\"BytesStaged\"\t\t\"{bytes_have}\"\n\
+         \t\"AutoUpdateBehavior\"\t\t\"{auto_update_behavior}\"\n\
+         \t\"AllowOtherDownloadsWhileRunning\"\t\t\"0\"\n\
+         \t\"ScheduledAutoUpdate\"\t\t\"0\"\n"
+    );
+    content.push_str(&kept.pairs);
+
+    if !installed_depots.is_empty() || !carried.is_empty() {
+        content.push_str("\t\"InstalledDepots\"\n\t{\n");
+        for (depot_id, manifest_id, size) in installed_depots {
+            let extras = old_depots
+                .iter()
+                .find(|d| d.id == depot_id)
+                .map(|d| d.extras.as_str())
+                .unwrap_or("");
+            content.push_str(&format!(
+                "\t\t\"{depot_id}\"\n\t\t{{\n\t\t\t\"manifest\"\t\t\"{manifest_id}\"\n\t\t\t\"size\"\t\t\"{size}\"\n{extras}\t\t}}\n"
+            ));
+        }
+        for depot in carried {
+            content.push_str(&format!("\t\t{}\n", depot.raw));
+        }
+        content.push_str("\t}\n");
+    }
+
+    let clean = |s: &str| s.replace(['"', '\n', '\r', '{', '}', '\\'], "");
+    let user_config = match old_user_config {
+        Some(block) => Some(block.to_string()),
+        None => {
+            let mut entries = String::new();
+            if let Some(branch) = beta_key {
+                entries.push_str(&format!("\t\t\"betakey\"\t\t\"{}\"\n", clean(&branch)));
+            }
+            (!entries.is_empty()).then(|| format!("\"UserConfig\"\n\t{{\n{entries}\t}}"))
+        }
+    };
+    let language = language.map(clean).filter(|l| !l.is_empty());
+    let user_config = match (user_config, language) {
+        (Some(block), Some(lang)) => Some(block_with_key(&block, "language", &lang)),
+        (None, Some(lang)) => Some(format!(
+            "\"UserConfig\"\n\t{{\n\t\t\"language\"\t\t\"{lang}\"\n\t}}"
+        )),
+        (block, None) => block,
+    };
+    for block in user_config.iter().map(String::as_str).chain(mounted_config) {
+        content.push('\t');
+        content.push_str(block);
+        content.push('\n');
+    }
+    content.push_str(&kept.blocks);
+
+    content.push_str("}\n");
+    content
+}
+
+/// The base game's appmanifest `raw` with a DLC marked installed and enabled, or
+/// `None` when it already is:
+///
+/// 1. Add the DLC's downloaded depots to `InstalledDepots`, tagged with `dlcappid`
+///    (how Steam records DLC content as present).
+/// 2. Remove the DLC's appid from every `DisabledDLC` list (how Steam records the
+///    DLC as enabled vs. disabled).
+///
+/// Existing depot entries are left untouched, so re-installs are idempotent.
+pub(crate) fn enable_dlc_text(
+    raw: &str,
+    dlc_appid: u32,
+    depots: &[(u32, u64, u64)],
+) -> Result<Option<String>> {
+    let mut content = raw.to_string();
+    let mut changed = false;
+
+    // 1. Ensure the DLC's depots are recorded with their dlcappid.
+    let mut entries = String::new();
+    for (depot_id, manifest_id, size) in depots {
+        if content.contains(&format!("\"{depot_id}\"")) {
+            continue; // already recorded
+        }
+        entries.push_str(&format!(
+            "\t\t\"{depot_id}\"\n\t\t{{\n\t\t\t\"manifest\"\t\t\"{manifest_id}\"\n\t\t\t\"size\"\t\t\"{size}\"\n\t\t\t\"dlcappid\"\t\t\"{dlc_appid}\"\n\t\t}}\n"
+        ));
+    }
+    if !entries.is_empty() {
+        if let Some(pos) = content.find("\"InstalledDepots\"") {
+            let rel = content[pos..]
+                .find('{')
+                .ok_or_else(|| anyhow!("malformed InstalledDepots block"))?;
+            let insert_at = pos + rel + 1;
+            content.insert_str(insert_at, &format!("\n{entries}"));
+        } else {
+            let last = content
+                .rfind('}')
+                .ok_or_else(|| anyhow!("malformed appmanifest"))?;
+            content.insert_str(
+                last,
+                &format!("\t\"InstalledDepots\"\n\t{{\n{entries}\t}}\n"),
+            );
+        }
+        changed = true;
+    }
+
+    // 2. Remove the DLC appid from any "DisabledDLC" lists (enable it).
+    let updated = apply_dlc_disabled(&content, dlc_appid, false);
+    if updated != content {
+        content = updated;
+        changed = true;
+    }
+
+    Ok(changed.then_some(content))
 }
 
 /// One lexical token of VDF text.

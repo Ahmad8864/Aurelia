@@ -500,7 +500,11 @@ fn launch_selection_follows_the_installed_depots() {
             fully_installed: true,
             ..Default::default()
         };
-        SteamClient::write_appmanifest(&steamapps.join("appmanifest_70.acf"), spec).unwrap();
+        std::fs::write(
+            steamapps.join("appmanifest_70.acf"),
+            manifests::render_appmanifest(None, spec),
+        )
+        .unwrap();
         let app = LibraryGame {
             app_id: 70,
             name: "Half-Life".to_string(),
