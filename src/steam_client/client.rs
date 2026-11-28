@@ -42,6 +42,7 @@ impl SteamClient {
             server_list: None,
             pending_confirmations: Vec::new(),
             restore_error: None,
+            steam_files: Default::default(),
         })
     }
 
@@ -59,6 +60,7 @@ impl SteamClient {
             server_list: None,
             pending_confirmations: Vec::new(),
             restore_error: None,
+            steam_files: Default::default(),
         }
     }
 

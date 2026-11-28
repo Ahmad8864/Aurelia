@@ -15,8 +15,9 @@ pub(crate) struct InstallArgs {
     /// Depot platform to install. Auto-detected if omitted.
     #[arg(short, long)]
     pub(crate) platform: Option<PlatformArg>,
-    /// When installing a DLC, restart the Steam client afterward so the running
-    /// client picks up the change. Without this it only warns.
+    /// Stop Steam while installing over a record a running Steam holds (a DLC, a
+    /// resume or a reinstall), then restart it. Without this such an install
+    /// refuses to run while Steam is open. Fresh installs never need it.
     #[arg(short = 'r', long)]
     pub(crate) restart_steam: bool,
     /// Don't install — just report the estimated download and on-disk size
@@ -55,6 +56,10 @@ pub(crate) enum InstallAction {
         /// Resume every backlog entry, one after another.
         #[arg(short, long)]
         all: bool,
+        /// Stop Steam while resuming, then restart it. Implied for an install
+        /// started with it.
+        #[arg(short = 'r', long)]
+        restart_steam: bool,
     },
     /// Remove an install from the backlog.
     Forget {
@@ -94,4 +99,9 @@ pub(crate) struct DowngradeArgs {
     /// Don't pin after downgrading (Aurelia's update commands may re-upgrade it).
     #[arg(short = 'N', long)]
     pub(crate) no_pin: bool,
+    /// Stop Steam while downgrading, then restart it. A running Steam writes its
+    /// own record of the current build back, so without this the downgrade refuses
+    /// to run while Steam is open.
+    #[arg(short = 'r', long)]
+    pub(crate) restart_steam: bool,
 }

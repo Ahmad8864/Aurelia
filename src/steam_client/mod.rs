@@ -97,6 +97,8 @@ pub struct SteamClient {
     pending_confirmations: Vec<ConfirmationPrompt>,
     /// Why the last session restore failed.
     restore_error: Option<Arc<anyhow::Error>>,
+    /// What this client's Steam-file changes do when Steam is in the way.
+    steam_files: steam_files::SteamFileAccess,
 }
 
 // SteamClient methods are implemented across these submodules.
@@ -147,6 +149,9 @@ mod manifests;
 pub use manifests::AppManifestSpec;
 
 mod process;
+
+mod steam_files;
+pub use steam_files::restart_stopped_steam;
 
 mod storequery;
 
@@ -233,30 +238,26 @@ pub(crate) fn choose_install_dir(
     }
 }
 
-/// Best-effort: relocate app `appid`'s entry from `from_lib` to `to_lib` in
-/// `libraryfolders.vdf` (or just add it when `from_lib == to_lib`, e.g. for an
-/// import). Logs and continues on any problem — Steam reconciles the index from
+/// Best-effort: relocate app `appid`'s entry from `from_lib` to `to_lib` in the
+/// leased `libraryfolders.vdf` (or just add it when `from_lib == to_lib`, e.g. for
+/// an import). Logs and continues on any problem — Steam reconciles the index from
 /// the appmanifests on its next launch.
-async fn update_libraryfolders_for(from_lib: &Path, to_lib: &Path, appid: u32, install_dir: &Path) {
-    let roots = crate::library::all_library_roots().await;
-    let Some(vdf_path) = crate::library::relocate::find_libraryfolders_vdf(&roots) else {
-        return;
-    };
-    let Ok(text) = std::fs::read_to_string(&vdf_path) else {
-        tracing::warn!("could not read libraryfolders.vdf");
-        return;
-    };
-    let size = crate::core::fsutil::dir_size(install_dir);
-    match crate::library::relocate::update_libraryfolders_apps(&text, appid, from_lib, to_lib, size)
-    {
-        Some(updated) => {
-            if let Err(e) = crate::core::atomic::write_atomic(&vdf_path, updated.as_bytes()) {
-                tracing::warn!("could not write libraryfolders.vdf: {e}");
-            }
-        }
-        None => tracing::warn!(
-            "could not locate the library entry in libraryfolders.vdf; Steam will reconcile on next launch"
-        ),
+fn update_libraryfolders_for(
+    lease: &steam_files::Lease,
+    vdf: &Path,
+    from_lib: &Path,
+    to_lib: &Path,
+    appid: u32,
+    size: u64,
+) {
+    let result = lease.rewrite(vdf, |text| {
+        let text = text.context("the file is gone")?;
+        crate::library::relocate::update_libraryfolders_apps(text, appid, from_lib, to_lib, size)
+            .map(Some)
+            .context("could not locate the library entry; Steam will reconcile on next launch")
+    });
+    if let Err(e) = result {
+        tracing::warn!("{e:#}");
     }
 }
 

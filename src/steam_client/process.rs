@@ -88,7 +88,7 @@ impl SteamClient {
     /// Windows only. Editing appmanifests is only reliable while Steam is stopped,
     /// because Steam flushes its in-memory app state to disk on exit.
     #[cfg(target_os = "windows")]
-    pub fn shutdown_steam() -> Result<()> {
+    pub(crate) fn shutdown_steam() -> Result<()> {
         if !SteamClient::steam_is_running() {
             return Ok(());
         }
@@ -112,7 +112,7 @@ impl SteamClient {
     /// than popping its window to the foreground — Aurelia only restarts Steam to
     /// have it re-read state (e.g. after a DLC/move change), not to bring it up.
     #[cfg(target_os = "windows")]
-    pub fn start_steam() -> Result<()> {
+    pub(crate) fn start_steam() -> Result<()> {
         let exe = steam_exe_path().context("could not locate steam.exe to start Steam")?;
         Command::new(&exe)
             .arg("-silent")
@@ -123,7 +123,7 @@ impl SteamClient {
 
     /// Stop host Steam and wait (Linux, macOS).
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn shutdown_steam() -> Result<()> {
+    pub(crate) fn shutdown_steam() -> Result<()> {
         // Either request would start a stopped Steam.
         if !SteamClient::steam_is_running() {
             return Ok(());
@@ -147,13 +147,13 @@ impl SteamClient {
 
     /// Start host Steam silently (Linux).
     #[cfg(target_os = "linux")]
-    pub fn start_steam() -> Result<()> {
+    pub(crate) fn start_steam() -> Result<()> {
         crate::core::steam_host::start_steam_detached(&["-silent"]).context("failed to start Steam")
     }
 
     /// Start host Steam silently (macOS).
     #[cfg(target_os = "macos")]
-    pub fn start_steam() -> Result<()> {
+    pub(crate) fn start_steam() -> Result<()> {
         SteamClient::open_in_background(&["-b", "com.valvesoftware.steam", "--args", "-silent"])
             .context("failed to start Steam (is Steam.app installed?)")
     }

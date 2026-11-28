@@ -70,7 +70,8 @@ fn install_positional_and_subcommands_coexist() {
                 args.action,
                 Some(InstallAction::Resume {
                     app_id: None,
-                    all: true
+                    all: true,
+                    restart_steam: false,
                 })
             ))
         }

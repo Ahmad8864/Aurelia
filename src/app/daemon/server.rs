@@ -226,7 +226,7 @@ async fn auto_resume_installs() {
     // No client: discard output, stdin at EOF.
     let (out_tx, _) = tokio::sync::mpsc::unbounded_channel();
     let (_, in_rx) = tokio::sync::mpsc::unbounded_channel();
-    let resume = crate::app::commands::resume_entries(&ids, true, true);
+    let resume = crate::app::commands::resume_entries(&ids, true, false, true);
     if let Err(e) = crate::app::output::scoped(OutputCtx::new(out_tx, in_rx, None), resume).await {
         tracing::warn!("daemon: auto-resume: {e:#}");
     }

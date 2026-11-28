@@ -344,8 +344,9 @@ pub(crate) enum Command {
     /// Enable an installed DLC for its base game.
     Enable {
         app_id: u32,
-        /// Stop Steam while applying the change, then restart it, so the running
-        /// client picks it up. Steam reads DLC state only at startup.
+        /// Stop Steam while applying the change, then restart it. A running Steam
+        /// writes its own DLC state back, so without this the change refuses to run
+        /// while Steam is open.
         #[arg(short = 'r', long)]
         restart_steam: bool,
     },
@@ -426,12 +427,25 @@ pub(crate) enum Command {
     /// List available beta branches for a game.
     Branches { app_id: u32 },
     /// Switch a game to a different branch.
-    SetBranch { app_id: u32, branch: String },
+    SetBranch {
+        app_id: u32,
+        branch: String,
+        /// Stop Steam while switching, then restart it. A running Steam writes its
+        /// own record of the old branch back, so without this the switch refuses to
+        /// run while Steam is open.
+        #[arg(short = 'r', long)]
+        restart_steam: bool,
+    },
     /// Swap an installed game's language depots.
     SetLanguage {
         app_id: u32,
         /// Steam language name, e.g. `german`.
         language: String,
+        /// Stop Steam while switching, then restart it. A running Steam writes its
+        /// own record of the old language back, so without this the switch refuses
+        /// to run while Steam is open.
+        #[arg(short = 'r', long)]
+        restart_steam: bool,
     },
     /// List depots for a game.
     Depots(DepotsArgs),

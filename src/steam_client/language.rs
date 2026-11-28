@@ -286,6 +286,7 @@ impl SteamClient {
         if language.is_empty() {
             bail!("language must not be empty");
         }
+        let lease = self.lease_steam_files(&[&manifest_path]).await?;
 
         let resolved = depots::fetch(&connection, appid, None).await?;
         let manifests = resolved.manifest_ids(&branch);
@@ -396,18 +397,17 @@ impl SteamClient {
             tracing::info!("Removed {deleted} file(s) of the old language for app {appid}");
 
             let remove: HashSet<u32> = plan.remove.iter().map(|(d, _)| *d).collect();
-            let result = std::fs::read_to_string(&manifest_path)
-                .with_context(|| format!("reading {}", manifest_path.display()))
-                .and_then(|raw| {
-                    let updated = super::manifests::switch_language_in_manifest(
-                        &raw, &remove, &added, &plan.dlc, &language,
-                    );
-                    crate::core::atomic::write_atomic(&manifest_path, updated.as_bytes())
-                });
+            let result = lease.rewrite(&manifest_path, |raw| {
+                let raw = raw.context("the file is gone")?;
+                Ok(Some(super::manifests::switch_language_in_manifest(
+                    raw, &remove, &added, &plan.dlc, &language,
+                )))
+            });
             if let Err(err) = result {
                 emit_failed_err(&tx, "appmanifest", &err).await;
                 return;
             }
+            lease.finish();
             if let Ok(mut state) = shared_state.write() {
                 state.finish("Language switched");
             }

@@ -16,6 +16,10 @@ pub(crate) enum ProtonCommand {
     Install {
         /// Runtime name, e.g. `GE-Proton9-20` or `Proton 9.0`.
         version: String,
+        /// Stop Steam while reinstalling a Valve runtime a running Steam holds, then
+        /// restart it. A fresh install never needs it.
+        #[arg(short = 'r', long)]
+        restart_steam: bool,
     },
     /// Uninstall an installed custom (GE) runtime from compatibilitytools.d.
     Uninstall { version: String },
@@ -27,6 +31,10 @@ pub(crate) enum ProtonCommand {
     Anticheat {
         /// Which runtime to install.
         runtime: AntiCheatArg,
+        /// Stop Steam while finishing a cancelled install a running Steam holds, then
+        /// restart it. A fresh install never needs it.
+        #[arg(short = 'r', long)]
+        restart_steam: bool,
     },
 }
 

@@ -548,11 +548,19 @@ The session daemon keeps running until `aurelia daemon stop`. Set
 used it for that long and no install or game is running. The next command starts a new
 daemon, which logs on to Steam again.
 
-`move`, `relink`, `import` and `update` edit Steam's library files, which a running Steam
-client overwrites with its own copy, so they refuse to run while Steam is open. Add
-`--restart-steam` to have Aurelia stop Steam, make the change and start Steam again, even if
-the change fails. For the same reason `play` skips its pre-launch update while Steam is open
-and launches the installed build, or refuses for a Family-Shared game that must be current.
+A running Steam client reads each game's `appmanifest_<appid>.acf` and `libraryfolders.vdf` at
+startup, then writes its own copy back over any change made since. So a command that changes
+one of these files refuses to run while Steam is open, with the error type `steam_running`
+(exit 88). That covers `update`, `downgrade`, `set-branch`, `set-language`, `enable`,
+`disable`, `move`, `relink`, and `import`. It also covers an `install`, `install resume`, `proton install`, or
+`proton anticheat` that writes over a record Steam already has, such as a DLC, a resume, or a
+reinstall. A fresh install never refuses, because its file doesn't exist yet, and `verify`
+changes no Steam file. Add `--restart-steam` to have Aurelia stop Steam, make the change and
+start Steam again, even if the change fails or you cancel it. When such changes overlap, Steam
+starts again once, after the last one ends. While any of these changes runs, a `play` that
+needs Steam refuses to start it. The daemon's automatic resume never stops Steam. For the same reason `play`
+skips its pre-launch update while Steam is open and launches the installed build, or refuses
+for a Family-Shared game that must be current.
 
 On Linux, `play` pre-compiles a game's Vulkan shaders before it starts, like Steam's
 "Processing Vulkan shaders" step. It replays the game's Steam pipeline cache

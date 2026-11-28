@@ -8,6 +8,7 @@ use crate::app::cli::{PlatformArg, SteamModeArg};
 use anyhow::{Context, Result, bail};
 use aurelia::core::config::load_launcher_config;
 use aurelia::core::config::load_user_configs;
+use aurelia::core::error::{ErrorKind, classify};
 use aurelia::core::models::DownloadState;
 use aurelia::steam_client::SteamClient;
 use std::path::PathBuf;
@@ -477,56 +478,58 @@ pub(crate) async fn cmd_play(
             }
             tracing::warn!("pre-launch update check failed ({e:#}); launching current version");
         }
-        // A running Steam reads appmanifests only at startup and writes its own copy
-        // back on the game's next state change, such as this launch, which would
-        // record the old build again.
-        if game.update_available && SteamClient::steam_is_running() {
-            let hint =
-                format!("close Steam or run `aurelia update {app_id} --restart-steam` first");
-            if update_required {
-                bail!(
-                    "required update for Family-Shared game {} can't be installed while \
-                     Steam is running; {hint}",
-                    game.name
-                );
-            }
-            let warning = format!(
-                "Update available for {}, but Steam is running and would record the old \
-                 build again. Launching the installed build; to update, {hint}.",
-                game.name
-            );
-            if json {
-                tracing::warn!(appid = app_id, "{warning}");
-            } else {
-                cli_println!("⚠ {warning}");
-            }
-        } else if game.update_available {
-            if !json {
-                let kind = if update_required {
-                    "Required update"
-                } else {
-                    "Update available"
-                };
-                cli_println!("{kind} for {} — installing ...", game.name);
-            }
+        if game.update_available {
             let state = Arc::new(RwLock::new(DownloadState::default()));
             // Registered like `aurelia update`: stoppable via `install stop`
             let update_result = match InstallGuard::register(app_id, Arc::clone(&state)) {
                 Ok(_guard) => match client.update_game(app_id, state).await {
-                    Ok(rx) => drive_progress(rx, json).await,
+                    Ok(rx) => {
+                        if !json {
+                            let kind = if update_required {
+                                "Required update"
+                            } else {
+                                "Update available"
+                            };
+                            cli_println!("{kind} for {} — installing ...", game.name);
+                        }
+                        drive_progress(rx, json).await
+                    }
                     Err(e) => Err(e),
                 },
                 Err(e) => Err(e),
             };
-            if let Err(e) = update_result {
-                if update_required {
-                    bail!(
-                        "required update for Family-Shared game {} failed ({e:#}); \
-                         it can't launch until updated",
+            match update_result {
+                Ok(()) => {}
+                Err(e) if classify(&e).kind == ErrorKind::SteamRunning => {
+                    let hint = format!(
+                        "close Steam or run `aurelia update {app_id} --restart-steam` first"
+                    );
+                    if update_required {
+                        bail!(
+                            "required update for Family-Shared game {} can't be installed \
+                             while Steam is running; {hint}",
+                            game.name
+                        );
+                    }
+                    let warning = format!(
+                        "Update available for {}, but Steam is running and would record the \
+                         old build again. Launching the installed build; to update, {hint}.",
                         game.name
                     );
+                    if json {
+                        tracing::warn!(appid = app_id, "{warning}");
+                    } else {
+                        cli_println!("⚠ {warning}");
+                    }
                 }
-                tracing::warn!("pre-launch update failed ({e:#}); launching current version");
+                Err(e) if update_required => bail!(
+                    "required update for Family-Shared game {} failed ({e:#}); it can't \
+                     launch until updated",
+                    game.name
+                ),
+                Err(e) => {
+                    tracing::warn!("pre-launch update failed ({e:#}); launching current version")
+                }
             }
         }
     }

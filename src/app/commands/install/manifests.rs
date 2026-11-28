@@ -179,7 +179,9 @@ pub(crate) async fn cmd_downgrade(args: DowngradeArgs, json: bool) -> Result<()>
         );
     }
 
-    let mut client = authed_client().await?;
+    let mut client = authed_client()
+        .await?
+        .allow_steam_restart(args.restart_steam);
 
     // Auto-detect the platform for the non-pinned depots; overridden depots are
     // force-included by install_game regardless of platform.
@@ -234,6 +236,7 @@ pub(crate) async fn cmd_downgrade(args: DowngradeArgs, json: bool) -> Result<()>
             .with_context(|| format!("failed to verify app {}", args.app_id))?;
         drive_progress(vrx, json).await?;
     }
+    client.steam_files_report()?;
 
     let pinned = !args.no_pin;
     if pinned {

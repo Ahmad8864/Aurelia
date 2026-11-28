@@ -169,7 +169,11 @@ pub(crate) async fn cmd_proton_mappings(json: bool) -> Result<()> {
 }
 
 /// `proton install`: download/install a runtime and make it the global default.
-pub(crate) async fn cmd_proton_install(version: String, json: bool) -> Result<()> {
+pub(crate) async fn cmd_proton_install(
+    version: String,
+    restart_steam: bool,
+    json: bool,
+) -> Result<()> {
     // Before resolving: no download is useful where the runtime can't run.
     if !aurelia::core::runner::PROTON_SUPPORTED {
         bail!(
@@ -185,7 +189,7 @@ pub(crate) async fn cmd_proton_install(version: String, json: bool) -> Result<()
             if !json {
                 cli_println!("Installing {} via Steam (app {app_id}) ...", pkg.name);
             }
-            let client = authed_client().await?;
+            let client = authed_client().await?.allow_steam_restart(restart_steam);
             let state = Arc::new(RwLock::new(DownloadState::default()));
             let rx = client
                 .install_game(
@@ -197,6 +201,7 @@ pub(crate) async fn cmd_proton_install(version: String, json: bool) -> Result<()
                 .await
                 .with_context(|| format!("failed to start installing {}", pkg.name))?;
             drive_progress(rx, json).await?;
+            client.steam_files_report()?;
         }
         aurelia::compat::proton::ProtonSource::Github { .. } => {
             if !json {
@@ -233,6 +238,7 @@ pub(crate) async fn cmd_proton_install(version: String, json: bool) -> Result<()
 /// `proton anticheat`: install one runtime.
 pub(crate) async fn cmd_proton_anticheat(
     kind: aurelia::compat::anticheat::AntiCheat,
+    restart_steam: bool,
     json: bool,
 ) -> Result<()> {
     if !aurelia::core::runner::PROTON_SUPPORTED {
@@ -251,7 +257,7 @@ pub(crate) async fn cmd_proton_anticheat(
                 kind.runtime_name()
             );
         }
-        let client = authed_client().await?;
+        let client = authed_client().await?.allow_steam_restart(restart_steam);
         let state = Arc::new(RwLock::new(DownloadState::default()));
         let rx = client
             .install_game(
@@ -263,6 +269,7 @@ pub(crate) async fn cmd_proton_anticheat(
             .await
             .with_context(|| format!("failed to start installing {}", kind.runtime_name()))?;
         drive_progress(rx, json).await?;
+        client.steam_files_report()?;
     }
     let path = aurelia::compat::anticheat::installed_runtimes()
         .await

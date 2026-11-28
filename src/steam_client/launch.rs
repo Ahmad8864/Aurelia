@@ -319,6 +319,14 @@ pub fn forced_steam_reason(app: &LibraryGame) -> Option<&'static str> {
     }
 }
 
+/// What a manifest download does with its result.
+pub(crate) enum ManifestRun {
+    /// Repair against the recorded manifests. Changes no Steam file.
+    Verify,
+    /// Move to the branch's latest build and record it.
+    Update,
+}
+
 impl SteamClient {
     pub async fn play_game(
         &mut self,
@@ -352,6 +360,16 @@ impl SteamClient {
             None => launch_options,
         };
 
+        // Starting Steam now would let it read a record Aurelia is still changing.
+        if steam_enabled
+            && super::steam_files::steam_files_leased()
+            && !SteamClient::steam_is_running()
+        {
+            bail!(
+                "Aurelia is changing Steam's library files, and a Steam started now would \
+                 undo that change. Launch with Steam integration once it ends."
+            );
+        }
         // With Steam integration the game talks to the host Steam client; make sure
         // one is running (start it silently if not) so Steamworks/Family-Sharing can
         // initialise. Best-effort.
@@ -631,7 +649,7 @@ impl SteamClient {
         appid: u32,
         shared_state: Arc<std::sync::RwLock<crate::core::models::DownloadState>>,
     ) -> Result<Receiver<DownloadProgress>> {
-        self.start_manifest_download(appid, false, shared_state)
+        self.start_manifest_download(appid, ManifestRun::Update, shared_state)
             .await
     }
 
@@ -640,20 +658,25 @@ impl SteamClient {
         appid: u32,
         shared_state: Arc<std::sync::RwLock<crate::core::models::DownloadState>>,
     ) -> Result<Receiver<DownloadProgress>> {
-        self.start_manifest_download(appid, true, shared_state)
+        self.start_manifest_download(appid, ManifestRun::Verify, shared_state)
             .await
     }
 
     pub(crate) async fn start_manifest_download(
         &self,
         appid: u32,
-        verify_mode: bool,
+        run: ManifestRun,
         shared_state: Arc<std::sync::RwLock<crate::core::models::DownloadState>>,
     ) -> Result<Receiver<DownloadProgress>> {
+        let verify_mode = matches!(run, ManifestRun::Verify);
         let connection = self.require_connection_owned()?;
 
         let install_root = self.install_root_for_app(appid).await?;
         let manifest_path = self.appmanifest_path(appid).await?;
+        let lease = match run {
+            ManifestRun::Verify => None,
+            ManifestRun::Update => Some(self.lease_steam_files(&[&manifest_path]).await?),
+        };
         let (tx, rx) = tokio::sync::mpsc::channel(128);
 
         let (local_manifests, active_branch) = self
@@ -818,10 +841,10 @@ impl SteamClient {
             }
 
             // Verify repairs against the manifests already recorded, so the record stays.
-            if verify_mode {
+            let Some(lease) = lease else {
                 emit_completed(&tx, "verify completed").await;
                 return;
-            }
+            };
 
             // The content was written into `install_root`
             let game_name = match recorded_name {
@@ -837,24 +860,22 @@ impl SteamClient {
             let build_id =
                 SteamClient::remote_buildid_static(&connection, appid, &active_branch).await;
 
-            let existing = std::fs::read_to_string(&manifest_path).ok();
-            let content = super::manifests::render_appmanifest(
-                existing.as_deref(),
-                AppManifestSpec {
-                    appid,
-                    game_name: &game_name,
-                    installdir: &installdir,
-                    installed_depots: successful_depots,
-                    buildid: build_id.as_deref(),
-                    fully_installed: true,
-                    pin_updates: false,
-                    language: None,
-                },
-            );
-            if let Err(err) = crate::core::atomic::write_atomic(&manifest_path, content.as_bytes())
-            {
-                tracing::warn!("failed writing appmanifest for {}: {}", appid, err);
+            let spec = AppManifestSpec {
+                appid,
+                game_name: &game_name,
+                installdir: &installdir,
+                installed_depots: successful_depots,
+                buildid: build_id.as_deref(),
+                fully_installed: true,
+                pin_updates: false,
+                language: None,
+            };
+            if let Err(err) = lease.rewrite(&manifest_path, |old| {
+                Ok(Some(super::manifests::render_appmanifest(old, spec)))
+            }) {
+                tracing::warn!("failed writing appmanifest for {appid}: {err:#}");
             }
+            lease.finish();
             emit_completed(&tx, "update completed").await;
         });
 

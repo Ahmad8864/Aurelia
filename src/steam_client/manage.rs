@@ -45,12 +45,11 @@ impl SteamClient {
             bail!("appmanifest not found for app {appid}");
         }
 
-        let raw = std::fs::read_to_string(&manifest_path)
-            .with_context(|| format!("failed reading {}", manifest_path.display()))?;
-
-        let rewritten = acf::rewrite_branch(&raw, branch);
-        crate::core::atomic::write_atomic(&manifest_path, rewritten.as_bytes())?;
-
+        let lease = self.lease_steam_files(&[&manifest_path]).await?;
+        lease.rewrite(&manifest_path, |raw| {
+            let raw = raw.context("the file is gone")?;
+            Ok(Some(acf::rewrite_branch(raw, branch)))
+        })?;
         Ok(())
     }
 
@@ -119,9 +118,8 @@ impl SteamClient {
     /// so the Steam client recognises the game at its new path instead of
     /// reporting it as missing. Returns a progress stream (`Moving` events).
     ///
-    /// Steam should not be running during the move — it overwrites these files on
-    /// exit. The source is only deleted after a successful copy, so an interrupted
-    /// move never loses the original install.
+    /// The source is only deleted after a successful copy, so an interrupted move
+    /// never loses the original install.
     pub async fn move_install(
         &self,
         appid: u32,
@@ -179,6 +177,9 @@ impl SteamClient {
             );
         }
         let libraryfolders = relocate::find_libraryfolders_vdf(&roots);
+        let mut files = vec![src_manifest.as_path(), dest_manifest.as_path()];
+        files.extend(libraryfolders.as_deref());
+        let lease = self.lease_steam_files(&files).await?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(64);
 
@@ -226,47 +227,23 @@ impl SteamClient {
                     .with_context(|| format!("failed moving Proton prefix to {}", dc.display()))?;
                 }
 
-                // appmanifest: copy to the new library, then remove the original so
-                // Steam sees the game in exactly one place.
-                std::fs::copy(&src_manifest, &dest_manifest)
-                    .with_context(|| format!("failed writing {}", dest_manifest.display()))?;
-                std::fs::remove_file(&src_manifest)
-                    .with_context(|| format!("failed removing {}", src_manifest.display()))?;
+                // Steam must see the game in exactly one place.
+                lease.move_file(&src_manifest, &dest_manifest)?;
 
-                // libraryfolders.vdf apps index (best-effort; Steam reconciles from
-                // the appmanifests on next launch if this can't be edited cleanly).
-                if let Some(vdf_path) = &libraryfolders {
-                    match std::fs::read_to_string(vdf_path) {
-                        Ok(text) => {
-                            match relocate::update_libraryfolders_apps(
-                                &text,
-                                appid,
-                                &src_lib_root,
-                                &dest_library,
-                                common_bytes,
-                            ) {
-                                Some(updated) => {
-                                    if let Err(e) = crate::core::atomic::write_atomic(
-                                        vdf_path,
-                                        updated.as_bytes(),
-                                    ) {
-                                        tracing::warn!(
-                                            "moved game but could not write libraryfolders.vdf: {e}"
-                                        );
-                                    }
-                                }
-                                None => tracing::warn!(
-                                    "could not locate library entries in libraryfolders.vdf; \
-                                     Steam will reconcile the index on next launch"
-                                ),
-                            }
-                        }
-                        Err(e) => tracing::warn!("could not read libraryfolders.vdf: {e}"),
-                    }
+                if let Some(vdf) = &libraryfolders {
+                    update_libraryfolders_for(
+                        &lease,
+                        vdf,
+                        &src_lib_root,
+                        &dest_library,
+                        appid,
+                        common_bytes,
+                    );
                 }
 
                 Ok(())
             })();
+            lease.finish();
 
             match result {
                 Ok(()) => {
@@ -332,22 +309,26 @@ impl SteamClient {
             );
         }
         let dest_manifest = dest_steamapps.join(format!("appmanifest_{appid}.acf"));
+        let roots = crate::library::all_library_roots().await;
+        let libraryfolders = crate::library::relocate::find_libraryfolders_vdf(&roots);
+        let mut files = vec![src_manifest.as_path(), dest_manifest.as_path()];
+        files.extend(libraryfolders.as_deref());
+        let lease = self.lease_steam_files(&files).await?;
 
         // Move only the manifest (files are already in place).
-        std::fs::copy(&src_manifest, &dest_manifest)
-            .with_context(|| format!("failed writing {}", dest_manifest.display()))?;
-        std::fs::remove_file(&src_manifest)
-            .with_context(|| format!("failed removing {}", src_manifest.display()))?;
-
-        update_libraryfolders_for(&src_lib_root, &dest_library, appid, &dest_common).await;
+        lease.move_file(&src_manifest, &dest_manifest)?;
+        if let Some(vdf) = &libraryfolders {
+            let size = crate::core::fsutil::dir_size(&dest_common);
+            update_libraryfolders_for(&lease, vdf, &src_lib_root, &dest_library, appid, size);
+        }
         Ok(dest_common)
     }
 
     /// Import an on-disk install that Steam doesn't know about: write an
     /// `appmanifest_<appid>.acf` for the existing files in `library` and register
     /// it in `libraryfolders.vdf`. Depot manifests and the build id come from PICS
-    /// so Steam sees the game as installed and up to date. Steam should not be
-    /// running. Returns the install directory.
+    /// so Steam sees the game as installed and up to date. Returns the install
+    /// directory.
     pub async fn import_install(
         &self,
         appid: u32,
@@ -428,23 +409,31 @@ impl SteamClient {
             );
         }
 
-        let content = super::manifests::render_appmanifest(
-            None,
-            AppManifestSpec {
-                appid,
-                game_name: &name,
-                installdir: &installdir,
-                installed_depots,
-                buildid: buildid.as_deref(),
-                fully_installed: true,
-                pin_updates: false,
-                language: None,
-            },
-        );
-        crate::core::atomic::write_atomic(&manifest, content.as_bytes())?;
+        let roots = crate::library::all_library_roots().await;
+        let libraryfolders = crate::library::relocate::find_libraryfolders_vdf(&roots);
+        let mut files = vec![manifest.as_path()];
+        files.extend(libraryfolders.as_deref());
+        let lease = self.lease_steam_files(&files).await?;
+
+        let spec = AppManifestSpec {
+            appid,
+            game_name: &name,
+            installdir: &installdir,
+            installed_depots,
+            buildid: buildid.as_deref(),
+            fully_installed: true,
+            pin_updates: false,
+            language: None,
+        };
+        lease.rewrite(&manifest, |old| {
+            Ok(Some(super::manifests::render_appmanifest(old, spec)))
+        })?;
 
         // Register in libraryfolders.vdf (add to this library; nothing to remove).
-        update_libraryfolders_for(&library, &library, appid, &common_dir).await;
+        if let Some(vdf) = &libraryfolders {
+            let size = crate::core::fsutil::dir_size(&common_dir);
+            update_libraryfolders_for(&lease, vdf, &library, &library, appid, size);
+        }
         Ok(common_dir)
     }
 }

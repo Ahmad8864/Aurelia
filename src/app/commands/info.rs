@@ -20,36 +20,26 @@ pub(crate) async fn cmd_set_dlc(
     restart_steam: bool,
     json: bool,
 ) -> Result<()> {
-    let client = restored_client().await?;
-
-    // Steam flushes its in-memory app state on exit, so the edit must happen while
-    // Steam is stopped to survive. With --restart-steam: stop → edit → start.
-    let manage_steam = steam_guard_stop_optional(restart_steam, json)?;
-
-    let base = with_steam_stopped(manage_steam, json, async {
-        client
-            .set_dlc_enabled(app_id, enable)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to {} DLC {app_id}",
-                    if enable { "enable" } else { "disable" }
-                )
-            })
-    })
-    .await?;
-    let steam_restarted = manage_steam;
+    let client = restored_client().await?.allow_steam_restart(restart_steam);
+    let base = client
+        .set_dlc_enabled(app_id, enable)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to {} DLC {app_id}",
+                if enable { "enable" } else { "disable" }
+            )
+        })?;
+    let steam_restarted = client.steam_files_report()?;
 
     let action = if enable { "enabled" } else { "disabled" };
-    let restart_required = !manage_steam && SteamClient::steam_is_running();
-
     if json {
         print_json(&serde_json::json!({
             "app_id": app_id,
             "base_app_id": base,
             "status": action,
             "steam_restarted": steam_restarted,
-            "steam_restart_required": restart_required,
+            "steam_restart_required": false,
         }));
         return Ok(());
     }
@@ -59,12 +49,6 @@ pub(crate) async fn cmd_set_dlc(
         cli_println!(
             "(Toggles the flag only — run `aurelia install {app_id}` if the content isn't downloaded.)"
         );
-    }
-    if restart_required {
-        cli_eprintln!(
-            "Note: Steam is running and reads DLC state only at startup, so this won't apply"
-        );
-        cli_eprintln!("      until you restart Steam (or re-run with --restart-steam).");
     }
     Ok(())
 }
@@ -89,12 +73,18 @@ pub(crate) async fn cmd_branches(app_id: u32, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_set_branch(app_id: u32, branch: String, json: bool) -> Result<()> {
-    let client = authed_client().await?;
+pub(crate) async fn cmd_set_branch(
+    app_id: u32,
+    branch: String,
+    restart_steam: bool,
+    json: bool,
+) -> Result<()> {
+    let client = authed_client().await?.allow_steam_restart(restart_steam);
     client
         .update_app_branch(app_id, &branch)
         .await
         .with_context(|| format!("failed to switch app {app_id} to branch {branch}"))?;
+    client.steam_files_report()?;
     if json {
         print_json(&serde_json::json!({ "app_id": app_id, "branch": branch, "status": "set" }));
     } else {

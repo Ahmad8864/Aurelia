@@ -1060,6 +1060,8 @@ Options:
           Verify the install after downloading (integrity pass)
   -N, --no-pin
           Don't pin after downgrading (Aurelia's update commands may re-upgrade it)
+  -r, --restart-steam
+          Stop Steam while downgrading, then restart it. A running Steam writes its own record of the current build back, so without this the downgrade refuses to run while Steam is open
   -j, --json
           Emit output (and errors) as JSON. Works with every command
   -v, --verbose...
@@ -1106,7 +1108,7 @@ Arguments:
   <APP_ID>  
 
 Options:
-  -r, --restart-steam  Stop Steam while applying the change, then restart it, so the running client picks it up. Steam reads DLC state only at startup
+  -r, --restart-steam  Stop Steam while applying the change, then restart it. A running Steam writes its own DLC state back, so without this the change refuses to run while Steam is open
   -j, --json           Emit output (and errors) as JSON. Works with every command
   -v, --verbose...     Increase log verbosity (repeatable: -v, -vv, -vvv). Without it only warnings and errors are logged. -v adds progress/debug logs and a launched game's own output; -vv/-vvv unmute the Steam networking stack so a stalled command shows where it is stuck. `RUST_LOG` / `AURELIA_LOG` override the logs
   -h, --help           Print help
@@ -1257,7 +1259,7 @@ Arguments:
 
 Options:
   -p, --platform <PLATFORM>  Depot platform to install. Auto-detected if omitted [possible values: windows, linux]
-  -r, --restart-steam        When installing a DLC, restart the Steam client afterward so the running client picks up the change. Without this it only warns
+  -r, --restart-steam        Stop Steam while installing over a record a running Steam holds (a DLC, a resume or a reinstall), then restart it. Without this such an install refuses to run while Steam is open. Fresh installs never need it
   -d, --dry-run              Don't install — just report the estimated download and on-disk size and the language choices (from PICS, no files fetched). Pair with `--json` for tooling
   -l, --library <LIBRARY>    Steam library folder (drive/location) to install into. A library root containing a `steamapps` directory, as listed by `aurelia libraries`. Defaults to the configured `steam_library_path`
       --language <LANGUAGE>  Steam language to install, e.g. `german`. Must be one of the `languages` that `--dry-run --json` lists; recorded like a Steam language choice. Defaults to the manifest, Steam client or config language, falling back to English
@@ -1311,10 +1313,11 @@ Arguments:
   [APP_ID]  App id to resume
 
 Options:
-  -a, --all         Resume every backlog entry, one after another
-  -j, --json        Emit output (and errors) as JSON. Works with every command
-  -v, --verbose...  Increase log verbosity (repeatable: -v, -vv, -vvv). Without it only warnings and errors are logged. -v adds progress/debug logs and a launched game's own output; -vv/-vvv unmute the Steam networking stack so a stalled command shows where it is stuck. `RUST_LOG` / `AURELIA_LOG` override the logs
-  -h, --help        Print help
+  -a, --all            Resume every backlog entry, one after another
+  -r, --restart-steam  Stop Steam while resuming, then restart it. Implied for an install started with it
+  -j, --json           Emit output (and errors) as JSON. Works with every command
+  -v, --verbose...     Increase log verbosity (repeatable: -v, -vv, -vvv). Without it only warnings and errors are logged. -v adds progress/debug logs and a launched game's own output; -vv/-vvv unmute the Steam networking stack so a stalled command shows where it is stuck. `RUST_LOG` / `AURELIA_LOG` override the logs
+  -h, --help           Print help
 
 ===== aurelia install stop =====
 Stop a running install by app id. It stays in the backlog as `aborted`
@@ -1767,6 +1770,9 @@ Arguments:
           - battleye: Proton BattlEye Runtime
 
 Options:
+  -r, --restart-steam
+          Stop Steam while finishing a cancelled install a running Steam holds, then restart it. A fresh install never needs it
+
   -j, --json
           Emit output (and errors) as JSON. Works with every command
 
@@ -1798,9 +1804,10 @@ Arguments:
   <VERSION>  Runtime name, e.g. `GE-Proton9-20` or `Proton 9.0`
 
 Options:
-  -j, --json        Emit output (and errors) as JSON. Works with every command
-  -v, --verbose...  Increase log verbosity (repeatable: -v, -vv, -vvv). Without it only warnings and errors are logged. -v adds progress/debug logs and a launched game's own output; -vv/-vvv unmute the Steam networking stack so a stalled command shows where it is stuck. `RUST_LOG` / `AURELIA_LOG` override the logs
-  -h, --help        Print help
+  -r, --restart-steam  Stop Steam while reinstalling a Valve runtime a running Steam holds, then restart it. A fresh install never needs it
+  -j, --json           Emit output (and errors) as JSON. Works with every command
+  -v, --verbose...     Increase log verbosity (repeatable: -v, -vv, -vvv). Without it only warnings and errors are logged. -v adds progress/debug logs and a launched game's own output; -vv/-vvv unmute the Steam networking stack so a stalled command shows where it is stuck. `RUST_LOG` / `AURELIA_LOG` override the logs
+  -h, --help           Print help
 
 ===== aurelia proton list =====
 List installable runtimes (Valve + GE) and what's already installed
@@ -1984,9 +1991,10 @@ Arguments:
   <BRANCH>  
 
 Options:
-  -j, --json        Emit output (and errors) as JSON. Works with every command
-  -v, --verbose...  Increase log verbosity (repeatable: -v, -vv, -vvv). Without it only warnings and errors are logged. -v adds progress/debug logs and a launched game's own output; -vv/-vvv unmute the Steam networking stack so a stalled command shows where it is stuck. `RUST_LOG` / `AURELIA_LOG` override the logs
-  -h, --help        Print help
+  -r, --restart-steam  Stop Steam while switching, then restart it. A running Steam writes its own record of the old branch back, so without this the switch refuses to run while Steam is open
+  -j, --json           Emit output (and errors) as JSON. Works with every command
+  -v, --verbose...     Increase log verbosity (repeatable: -v, -vv, -vvv). Without it only warnings and errors are logged. -v adds progress/debug logs and a launched game's own output; -vv/-vvv unmute the Steam networking stack so a stalled command shows where it is stuck. `RUST_LOG` / `AURELIA_LOG` override the logs
+  -h, --help           Print help
 
 ===== aurelia set-language =====
 Swap an installed game's language depots
@@ -1998,9 +2006,10 @@ Arguments:
   <LANGUAGE>  Steam language name, e.g. `german`
 
 Options:
-  -j, --json        Emit output (and errors) as JSON. Works with every command
-  -v, --verbose...  Increase log verbosity (repeatable: -v, -vv, -vvv). Without it only warnings and errors are logged. -v adds progress/debug logs and a launched game's own output; -vv/-vvv unmute the Steam networking stack so a stalled command shows where it is stuck. `RUST_LOG` / `AURELIA_LOG` override the logs
-  -h, --help        Print help
+  -r, --restart-steam  Stop Steam while switching, then restart it. A running Steam writes its own record of the old language back, so without this the switch refuses to run while Steam is open
+  -j, --json           Emit output (and errors) as JSON. Works with every command
+  -v, --verbose...     Increase log verbosity (repeatable: -v, -vv, -vvv). Without it only warnings and errors are logged. -v adds progress/debug logs and a launched game's own output; -vv/-vvv unmute the Steam networking stack so a stalled command shows where it is stuck. `RUST_LOG` / `AURELIA_LOG` override the logs
+  -h, --help           Print help
 
 ===== aurelia shaders =====
 Pre-compile a game's Vulkan shaders from its Steam pipeline cache (`steamapps/shadercache/<appid>`), as Steam's "Processing Vulkan shaders" does. `play` does this automatically unless `config shader-precache off`

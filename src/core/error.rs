@@ -33,6 +33,8 @@ pub enum ErrorKind {
     Offline,
     /// Steam wants other depots.
     SteamConfigMismatch,
+    /// A running Steam holds a file the command would change.
+    SteamRunning,
     Unknown,
 }
 
@@ -55,6 +57,7 @@ impl ErrorKind {
         Self::DiskFull,
         Self::Offline,
         Self::SteamConfigMismatch,
+        Self::SteamRunning,
         Self::Unknown,
     ];
 
@@ -76,6 +79,9 @@ impl ErrorKind {
                 "Steam wants a different platform or language depot set; check the game's \
                  language and compatibility tool in Steam (`aurelia proton mappings` lists dangling tools)",
             ),
+            Self::SteamRunning => Some(
+                "close Steam, or re-run with --restart-steam (-r) to have Aurelia stop and restart it",
+            ),
             _ => None,
         }
     }
@@ -93,6 +99,7 @@ impl ErrorKind {
             Self::DiskFull => 85,
             Self::Offline => 86,
             Self::SteamConfigMismatch => 87,
+            Self::SteamRunning => 88,
             _ => 1,
         }
     }

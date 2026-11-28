@@ -27,32 +27,33 @@ pub(crate) async fn cmd_update(
         bail!("app {app_id} is pinned — run `aurelia unpin {app_id}` first (or pass --force)");
     }
 
-    let client = authed_client().await?;
+    let client = authed_client().await?.allow_steam_restart(restart_steam);
     let (_install_guard, state) = InstallGuard::begin(app_id)?;
-    // Steam reads appmanifests only at startup and writes its own copy back on the
-    // game's next state change, which would record the old build again.
-    let managed = steam_guard_stop(restart_steam, json)?;
-    with_steam_stopped(managed, json, async {
-        let rx = client
-            .update_game(app_id, state)
-            .await
-            .with_context(|| format!("failed to update app {app_id}"))?;
-        drive_progress(rx, json).await
-    })
-    .await?;
+    let rx = client
+        .update_game(app_id, state)
+        .await
+        .with_context(|| format!("failed to update app {app_id}"))?;
+    drive_progress(rx, json).await?;
+    client.steam_files_report()?;
     report_operation(app_id, "updated", json);
     Ok(())
 }
 
 /// `set-language`: swap a game's language depots.
-pub(crate) async fn cmd_set_language(app_id: u32, language: String, json: bool) -> Result<()> {
-    let client = authed_client().await?;
+pub(crate) async fn cmd_set_language(
+    app_id: u32,
+    language: String,
+    restart_steam: bool,
+    json: bool,
+) -> Result<()> {
+    let client = authed_client().await?.allow_steam_restart(restart_steam);
     let (_install_guard, state) = InstallGuard::begin(app_id)?;
     let rx = client
         .set_game_language(app_id, &language, state)
         .await
         .with_context(|| format!("failed to switch app {app_id} to {language}"))?;
     drive_progress(rx, json).await?;
+    client.steam_files_report()?;
     if json {
         print_json(&serde_json::json!({
             "app_id": app_id,

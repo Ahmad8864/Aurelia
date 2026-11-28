@@ -92,9 +92,12 @@ pub(crate) async fn run_install(request: InstallRequest, json: bool) -> Result<(
         auto_attempts,
         language,
     } = request;
-    let mut client = authed_client().await?;
+    // An unattended resume never stops the user's Steam.
+    let unattended = auto_attempts > 0;
+    let mut client = authed_client()
+        .await?
+        .allow_steam_restart(restart_steam && !unattended);
 
-    // Note whether this is a DLC so we can refresh Steam's view afterward.
     let is_dlc = client.resolve_dlc_parent(app_id).await.is_some();
 
     let (platform, cached_vdf) = match platform {
@@ -167,9 +170,7 @@ pub(crate) async fn run_install(request: InstallRequest, json: bool) -> Result<(
     let state = Arc::new(RwLock::new(DownloadState::default()));
     let _install_guard = InstallGuard::register(app_id, Arc::clone(&state))?;
 
-    // Stop late; nothing below `?`-returns.
-    let manage_steam = steam_guard_stop_optional(restart_steam && is_dlc, json)?;
-
+    let prior = backlog::get(app_id);
     // Recorded first, so a crash stays resumable.
     let started = aurelia::core::time::now_unix();
     let mut record = backlog::BacklogEntry {
@@ -227,33 +228,30 @@ pub(crate) async fn run_install(request: InstallRequest, json: bool) -> Result<(
         }
         Err(err) => Err(err).with_context(|| format!("failed to start install for app {app_id}")),
     };
-    // Always restore a Steam client that we stopped, including when the download
-    // failed or was cancelled. Otherwise a failed DLC install can leave Steam
-    // stopped and hide the original install error behind cleanup failure.
-    let settled = finish_backlog(app_id, record, &state, outcome);
-    settle_with_restart(settled, || steam_guard_restart(manage_steam, json))?;
-    let steam_restarted = manage_steam;
-
-    // A newly installed DLC is invisible to an already-running Steam client until it
-    // re-reads the appmanifest (which it does at startup).
-    let steam_restart_required = is_dlc && !manage_steam && SteamClient::steam_is_running();
-    if steam_restart_required && !json {
-        cli_eprintln!();
-        cli_eprintln!(
-            "Note: the DLC content is installed, but a running Steam client reads DLC state"
-        );
-        cli_eprintln!(
-            "      only at startup. Restart Steam (or re-run with --restart-steam) for it to"
-        );
-        cli_eprintln!("      be recognized in-game.");
+    // A Steam refusal downloaded nothing, so the backlog goes back to how it was
+    // and an unattended resume doesn't spend an attempt.
+    let refused = matches!(&outcome, Err(e) if classify(e).kind == ErrorKind::SteamRunning);
+    if refused && let Ok(prior) = prior {
+        match prior {
+            Some(mut entry) => {
+                if unattended {
+                    entry.auto_attempts = entry.auto_attempts.saturating_sub(1);
+                }
+                note_backlog(backlog::upsert(entry));
+            }
+            None => note_backlog(backlog::remove(app_id)),
+        }
+        return outcome;
     }
+    finish_backlog(app_id, record, &state, outcome)?;
+    let steam_restarted = client.steam_files_report()?;
 
     if json {
         print_result_line(serde_json::json!({
             "app_id": app_id,
             "status": "installed",
             "dlc": is_dlc,
-            "steam_restart_required": steam_restart_required,
+            "steam_restart_required": false,
             "steam_restarted": steam_restarted,
         }));
     }
@@ -388,7 +386,12 @@ pub(crate) fn dry_run_json(
 }
 
 /// `aurelia install resume <app_id>|--all`.
-pub(crate) async fn cmd_install_resume(app_id: Option<u32>, all: bool, json: bool) -> Result<()> {
+pub(crate) async fn cmd_install_resume(
+    app_id: Option<u32>,
+    all: bool,
+    restart_steam: bool,
+    json: bool,
+) -> Result<()> {
     let entries = backlog::load()?;
     let ids: Vec<u32> = if all {
         entries.iter().map(|e| e.app_id).collect()
@@ -409,13 +412,18 @@ pub(crate) async fn cmd_install_resume(app_id: Option<u32>, all: bool, json: boo
         }
         return Ok(());
     }
-    resume_entries(&ids, false, json).await
+    resume_entries(&ids, false, restart_steam, json).await
 }
 
 /// Resume `ids` one after another.
 ///
 /// `auto` counts attempts; manual resets them.
-pub(crate) async fn resume_entries(ids: &[u32], auto: bool, json: bool) -> Result<()> {
+pub(crate) async fn resume_entries(
+    ids: &[u32],
+    auto: bool,
+    restart_steam: bool,
+    json: bool,
+) -> Result<()> {
     let mut failures: Vec<(u32, anyhow::Error)> = Vec::new();
     for &app_id in ids {
         let Some(entry) = backlog::get(app_id)? else {
@@ -453,7 +461,7 @@ pub(crate) async fn resume_entries(ids: &[u32], auto: bool, json: bool) -> Resul
             platform: Some(
                 DepotPlatform::from_name(&entry.platform).unwrap_or(DepotPlatform::Windows),
             ),
-            restart_steam: entry.restart_steam,
+            restart_steam: restart_steam || entry.restart_steam,
             library: Some(entry.library.clone()),
             on_disk: entry.downloaded_bytes,
             auto_attempts,

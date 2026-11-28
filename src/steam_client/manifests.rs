@@ -273,9 +273,6 @@ impl SteamClient {
 
     /// Enable or disable an owned DLC by editing the base game's appmanifest
     /// `DisabledDLC` lists. Returns the base game's appid.
-    ///
-    /// Note: the running Steam client is authoritative for DLC enable/disable and may
-    /// rewrite this state on launch; this edits the on-disk manifest only.
     pub async fn set_dlc_enabled(&self, dlc_appid: u32, enabled: bool) -> Result<u32> {
         let base_appid = self.resolve_dlc_parent(dlc_appid).await.ok_or_else(|| {
             anyhow!("app {dlc_appid} is not a DLC, or its base game could not be determined")
@@ -286,12 +283,11 @@ impl SteamClient {
             bail!("base game (app {base_appid}) for DLC {dlc_appid} is not installed");
         }
 
-        let content = std::fs::read_to_string(&manifest)
-            .with_context(|| format!("failed reading {}", manifest.display()))?;
-        let updated = apply_dlc_disabled(&content, dlc_appid, !enabled);
-        if updated != content {
-            crate::core::atomic::write_atomic(&manifest, updated.as_bytes())?;
-        }
+        let lease = self.lease_steam_files(&[&manifest]).await?;
+        lease.rewrite(&manifest, |raw| {
+            let raw = raw.context("the file is gone")?;
+            Ok(Some(apply_dlc_disabled(raw, dlc_appid, !enabled)))
+        })?;
         tracing::info!(
             "{} DLC {dlc_appid} in {}",
             if enabled { "Enabled" } else { "Disabled" },

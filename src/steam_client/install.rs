@@ -297,6 +297,7 @@ impl SteamClient {
             )
         });
 
+        let lease = self.lease_steam_files(&[&manifest_path]).await?;
         std::fs::create_dir_all(&install_dir)
             .with_context(|| format!("failed creating {}", install_dir.display()))?;
         if let Ok(mut state) = shared_state.write() {
@@ -500,24 +501,20 @@ impl SteamClient {
             // than missing. (Skipped for DLC, whose content lives in the base game's
             // manifest — overwriting that here would mark the base game for re-download.)
             if dlc_appid.is_none() {
-                let existing = std::fs::read_to_string(&manifest_path).ok();
-                let content = super::manifests::render_appmanifest(
-                    existing.as_deref(),
-                    AppManifestSpec {
-                        appid,
-                        game_name: &game_name,
-                        installdir: &installdir,
-                        installed_depots: Vec::new(),
-                        buildid: build_id.as_deref(),
-                        fully_installed: false,
-                        pin_updates,
-                        language: recorded_language.as_deref(),
-                    },
-                );
-                if let Err(e) =
-                    crate::core::atomic::write_atomic(&manifest_path, content.as_bytes())
-                {
-                    tracing::warn!("failed writing initial appmanifest for app {appid}: {e}");
+                let spec = AppManifestSpec {
+                    appid,
+                    game_name: &game_name,
+                    installdir: &installdir,
+                    installed_depots: Vec::new(),
+                    buildid: build_id.as_deref(),
+                    fully_installed: false,
+                    pin_updates,
+                    language: recorded_language.as_deref(),
+                };
+                if let Err(e) = lease.rewrite(&manifest_path, |old| {
+                    Ok(Some(super::manifests::render_appmanifest(old, spec)))
+                }) {
+                    tracing::warn!("failed writing initial appmanifest for app {appid}: {e:#}");
                 } else {
                     tracing::info!(
                         "Registered install start with Steam for app {appid} (buildid {})",
@@ -572,52 +569,39 @@ impl SteamClient {
                 state.status_text = "Download complete".to_string();
             }
 
-            let manifest_result = if let Some(dlc) = dlc_appid {
+            let manifest_result = if dlc_appid.is_some() {
                 // Register the DLC's depots into the base game's manifest (enable it).
-                std::fs::read_to_string(&manifest_path)
-                    .with_context(|| format!("failed reading {}", manifest_path.display()))
-                    .and_then(|raw| {
-                        super::manifests::enable_dlc_text(&raw, dlc, &successful_depots)
-                    })
-                    .and_then(|text| match text {
-                        Some(text) => {
-                            crate::core::atomic::write_atomic(&manifest_path, text.as_bytes())?;
-                            tracing::info!("Enabled DLC {dlc} in {}", manifest_path.display());
-                            Ok(())
-                        }
-                        None => {
-                            tracing::info!(
-                                "DLC {dlc} already enabled in {}",
-                                manifest_path.display()
-                            );
-                            Ok(())
-                        }
-                    })
+                lease.rewrite(&manifest_path, |raw| {
+                    let raw = raw.context("the base game's appmanifest is gone")?;
+                    super::manifests::enable_dlc_text(raw, appid, &successful_depots)
+                })
             } else {
-                let existing = std::fs::read_to_string(&manifest_path).ok();
-                let content = super::manifests::render_appmanifest(
-                    existing.as_deref(),
-                    AppManifestSpec {
-                        appid,
-                        game_name: &game_name,
-                        installdir: &installdir,
-                        installed_depots: successful_depots,
-                        buildid: build_id.as_deref(),
-                        fully_installed: true,
-                        pin_updates,
-                        language: recorded_language.as_deref(),
-                    },
-                );
-                crate::core::atomic::write_atomic(&manifest_path, content.as_bytes())
+                let spec = AppManifestSpec {
+                    appid,
+                    game_name: &game_name,
+                    installdir: &installdir,
+                    installed_depots: successful_depots,
+                    buildid: build_id.as_deref(),
+                    fully_installed: true,
+                    pin_updates,
+                    language: recorded_language.as_deref(),
+                };
+                lease.rewrite(&manifest_path, |old| {
+                    Ok(Some(super::manifests::render_appmanifest(old, spec)))
+                })
             };
-            if let Err(err) = manifest_result {
-                tracing::warn!("failed updating appmanifest for {}: {}", appid, err);
-            } else if dlc_appid.is_none() {
-                tracing::info!(
+            match manifest_result {
+                Err(err) => tracing::warn!("failed updating appmanifest for {appid}: {err:#}"),
+                Ok(_) if dlc_appid.is_none() => tracing::info!(
                     "Wrote appmanifest for app {appid}: fully installed, buildid {}",
                     build_id.as_deref().unwrap_or("0")
-                );
+                ),
+                Ok(true) => tracing::info!("Enabled DLC {appid} in {}", manifest_path.display()),
+                Ok(false) => {
+                    tracing::info!("DLC {appid} already enabled in {}", manifest_path.display())
+                }
             }
+            lease.finish();
             emit_completed(&tx, "completed").await;
         });
 
